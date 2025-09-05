@@ -408,4 +408,23 @@ def main():
     if groq_token.startswith('gsk_'):
         print(f"✅ Clé Groq détectée: {groq_token[:15]}...")
         print("🔥 Mode IA intégrale activé")
-        print("⏰ Conversations lim
+        print("⏰ Conversations limitées naturellement")
+    else:
+        print("⚠️ Clé Groq invalide (ne commence pas par gsk_)")
+        return
+
+    app = Application.builder().token(telegram_token).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("blague", blague_command))
+    app.add_handler(CommandHandler("stats", stats_command))
+    app.add_handler(CommandHandler("clear", clear_command))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    print("💕 Alicia est prête !")
+    
+    app.run_polling()
+
+if __name__ == '__main__':
+    main()
