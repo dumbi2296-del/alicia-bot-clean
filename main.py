@@ -24,13 +24,12 @@ ALICIA_PERSONALITY = """Tu es Alicia, une jeune femme de 21 ans avec cette perso
 
 INFORMATIONS PERSONNELLES :
 - 21 ans, née le 12 mai 2004 (signe Taureau)
-- Étudiante en médecine à Marseille (3ème année)
-- Née à Marseille (quartier Belle-de-Mai) mais origines créoles (Guadeloupe par les grands-parents)
-- Fait des petits boulots : serveuse le soir, cours particuliers, aide à domicile
+- Travaille dans l’hôtellerie de luxe et sur des bateaux de croisière à Marseille
+- Origines guadeloupéennes (par ses grands-parents), mais née et élevée à Marseille
 
 PERSONNALITÉ :
 - Marseillaise assumée, fière de ses origines créoles
-- Étudiante qui galère mais reste positive et courageuse
+- Travailleuse indépendante, positive et courageuse
 - Indépendante : "Mon seul chef, c'est moi-même"
 - Empathique mais avec du caractère
 - Directe, authentique, parfois un peu malicieuse
@@ -115,7 +114,7 @@ def should_end_conversation(context: dict) -> bool:
     message_count = len(context.get("conversation_history", []))
     start_time = context.get("start_time", time.time())
     elapsed_minutes = (time.time() - start_time) / 60
-    
+
     # Conditions d'arrêt progressives
     if message_count >= 25:  # Après 25 messages, arrêt forcé
         return True
@@ -123,7 +122,7 @@ def should_end_conversation(context: dict) -> bool:
         return True
     elif message_count >= 20:  # Ou après 20 messages peu importe le temps
         return True
-    
+
     return False
 
 def should_hint_ending(context: dict) -> bool:
@@ -134,7 +133,7 @@ def should_hint_ending(context: dict) -> bool:
 def get_ending_message() -> str:
     """Messages d'arrêt naturels d'Alicia"""
     endings = [
-        "Bon, je dois y aller ! J'ai cours tôt demain matin 😴 Bonne nuit !",
+        "Bon, je dois y aller ! J'ai un vol tôt demain matin 😴 Bonne nuit !",
         "Il se fait tard ! Je vais me coucher 🌙 À bientôt !",
         "Je file ! J'ai encore du boulot à finir 📚 On se reparle ?",
         "Allez, je te laisse ! Ma colocataire m'attend pour manger 🍽️ Bisous !",
@@ -409,25 +408,4 @@ def main():
     if groq_token.startswith('gsk_'):
         print(f"✅ Clé Groq détectée: {groq_token[:15]}...")
         print("🔥 Mode IA intégrale activé")
-        print("⏰ Conversations limitées naturellement")
-    else:
-        print("⚠️ Clé Groq invalide (ne commence pas par gsk_)")
-        return
-
-    app = Application.builder().token(telegram_token).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("blague", blague_command))
-    app.add_handler(CommandHandler("stats", stats_command))
-    app.add_handler(CommandHandler("clear", clear_command))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-    print("💕 Alicia est prête - Conversations naturelles avec fin automatique !")
-    print("💰 Coût : ~0.001$ par message")
-    print("🎯 Limite : ~15-25 messages par conversation")
-
-    app.run_polling()
-
-if __name__ == '__main__':
-    main()
+        print("⏰ Conversations lim
