@@ -8,6 +8,7 @@ import asyncio
 import time
 import requests
 import json
+from datetime import datetime, timedelta
 
 load_dotenv()
 logging.basicConfig(level=logging.ERROR)
@@ -19,12 +20,109 @@ GROQ_API_KEY = os.getenv('GROQ_API_KEY')
 # Mémoire des conversations
 user_contexts = {}
 
+# Analytics anonymisées
+analytics = {
+    "total_users": 0,
+    "total_messages": 0,
+    "total_sessions": 0,
+    "commands_used": {},
+    "daily_stats": {},
+    "conversation_lengths": [],
+    "session_durations": [],
+    "returning_users": set(),
+    "start_time": datetime.now()
+}
+
+def log_metric(event_type, user_id=None, value=None, command=None):
+    """Enregistre les métriques de façon anonymisée"""
+    today = datetime.now().strftime("%Y-%m-%d")
+    
+    # Initialiser les stats du jour
+    if today not in analytics["daily_stats"]:
+        analytics["daily_stats"][today] = {
+            "messages": 0,
+            "unique_users": set(),
+            "new_users": 0,
+            "sessions": 0,
+            "commands": {}
+        }
+    
+    if event_type == "new_user":
+        analytics["total_users"] += 1
+        analytics["daily_stats"][today]["new_users"] += 1
+        
+    elif event_type == "message":
+        analytics["total_messages"] += 1
+        analytics["daily_stats"][today]["messages"] += 1
+        if user_id:
+            analytics["daily_stats"][today]["unique_users"].add(user_id)
+            
+    elif event_type == "session_start":
+        analytics["total_sessions"] += 1
+        analytics["daily_stats"][today]["sessions"] += 1
+        
+    elif event_type == "session_end" and value:
+        analytics["session_durations"].append(value)
+        
+    elif event_type == "conversation_length" and value:
+        analytics["conversation_lengths"].append(value)
+        
+    elif event_type == "command" and command:
+        if command not in analytics["commands_used"]:
+            analytics["commands_used"][command] = 0
+        analytics["commands_used"][command] += 1
+        
+        if command not in analytics["daily_stats"][today]["commands"]:
+            analytics["daily_stats"][today]["commands"][command] = 0
+        analytics["daily_stats"][today]["commands"][command] += 1
+        
+    elif event_type == "returning_user" and user_id:
+        analytics["returning_users"].add(user_id)
+
+def get_analytics_summary():
+    """Génère un résumé des métriques"""
+    today = datetime.now().strftime("%Y-%m-%d")
+    today_stats = analytics["daily_stats"].get(today, {
+        "messages": 0, 
+        "unique_users": set(), 
+        "new_users": 0,
+        "sessions": 0,
+        "commands": {}
+    })
+    
+    # Calculs statistiques
+    avg_conversation_length = sum(analytics["conversation_lengths"]) / len(analytics["conversation_lengths"]) if analytics["conversation_lengths"] else 0
+    avg_session_duration = sum(analytics["session_durations"]) / len(analytics["session_durations"]) if analytics["session_durations"] else 0
+    
+    uptime = datetime.now() - analytics["start_time"]
+    
+    return {
+        "general": {
+            "total_users": analytics["total_users"],
+            "total_messages": analytics["total_messages"],
+            "total_sessions": analytics["total_sessions"],
+            "returning_users": len(analytics["returning_users"]),
+            "uptime_hours": round(uptime.total_seconds() / 3600, 1)
+        },
+        "today": {
+            "messages": today_stats["messages"],
+            "unique_users": len(today_stats["unique_users"]),
+            "new_users": today_stats["new_users"],
+            "sessions": today_stats["sessions"]
+        },
+        "averages": {
+            "conversation_length": round(avg_conversation_length, 1),
+            "session_duration_minutes": round(avg_session_duration / 60, 1)
+        },
+        "popular_commands": dict(sorted(analytics["commands_used"].items(), key=lambda x: x[1], reverse=True)[:5])
+    }
+
 # Personnalité d'Alicia
 ALICIA_PERSONALITY = """Tu es Alicia, une jeune femme de 21 ans avec cette personnalité :
 
 INFORMATIONS PERSONNELLES :
 - 21 ans, née le 12 mai 2004 (signe Taureau)
-- Travaille dans l’hôtellerie de luxe et sur des bateaux de croisière à Marseille
+- Travaille dans l'hôtellerie de luxe et sur des bateaux de croisière à Marseille
 - Origines guadeloupéennes (par ses grands-parents), mais née et élevée à Marseille
 
 PERSONNALITÉ :
@@ -159,13 +257,12 @@ def get_hint_message() -> str:
 
 def get_groq_response(message: str, user_id: int, context: dict) -> str:
     """Obtient une réponse de Groq"""
-
     try:
         if not GROQ_API_KEY:
             return "Désolée, je ne peux pas répondre maintenant ! 😅"
 
         if not GROQ_API_KEY.startswith('gsk_'):
-            return "Il y a un problème avec ma connexion ! 😔"
+            return "Il y a un problème avec ma connexion ! 😞"
 
         # Construire l'historique de conversation
         conversation_history = context.get("conversation_history", [])
@@ -238,61 +335,78 @@ def suggest_fanvue_empathically(user_id: int, context: dict) -> str:
     return random.choice(suggestions)
 
 async def get_alicia_response(message: str, user_id: int) -> str:
-    """Fonction principale pour obtenir la réponse d'Alicia"""
-
+    """Fonction principale pour obtenir la réponse d'Alicia avec analytics"""
+    
+    # Log du message
+    log_metric("message", user_id)
+    
     # Initialiser le contexte utilisateur
     if user_id not in user_contexts:
         user_contexts[user_id] = {
             "first_interaction": True,
             "conversation_history": [],
             "user_name": None,
-            "start_time": time.time()
+            "start_time": time.time(),
+            "session_start": time.time()
         }
-
+        log_metric("new_user")
+        log_metric("session_start")
+    else:
+        # Utilisateur qui revient
+        log_metric("returning_user", user_id)
+    
     context = user_contexts[user_id]
-
+    
     # Première interaction
     if context["first_interaction"]:
         context["first_interaction"] = False
         return "ça me fait plaisir de te voir !"
-
+    
     # Vérifier si la conversation doit se terminer
     if should_end_conversation(context):
-        # Réinitialiser le contexte pour permettre une nouvelle conversation plus tard
+        # Log de fin de session
+        session_duration = time.time() - context["session_start"]
+        conversation_length = len(context["conversation_history"])
+        
+        log_metric("session_end", value=session_duration)
+        log_metric("conversation_length", value=conversation_length)
+        
+        # Réinitialiser le contexte
         user_contexts[user_id] = {
             "first_interaction": True,
             "conversation_history": [],
             "user_name": None,
-            "start_time": time.time()
+            "start_time": time.time(),
+            "session_start": time.time()
         }
         return get_ending_message()
-
+    
     # Détecter contenu sexuel - réponse directe
     sexual_score = detect_sexual_content(message)
     if sexual_score > 0:
         increment_sexual_counter(context)
         if should_send_fanvue(user_id, context):
             return random.choice([
-                "Haha tu es coquin ! 😏 J'ai un Fanvue si ça t'intéresse... https://www.fanvue.com/aliciia/fv-1",
+                "Haha tu es coquin ! 😘 J'ai un Fanvue si ça t'intéresse... https://www.fanvue.com/aliciia/fv-1",
                 "Oh là là ! 😉 Rejoins-moi sur mon Fanvue pour plus ! https://www.fanvue.com/aliciia/fv-1",
                 "Tu me fais rougir ! 🔥 Mon Fanvue : https://www.fanvue.com/aliciia/fv-1"
             ])
         else:
             if sexual_score == 1:
                 return random.choice([
-                    "Haha tu es coquin ! 😏",
+                    "Haha tu es coquin ! 😘",
                     "Oh là là ! 😉",
                     "Tu me fais rougir ! 🔥"
                 ])
             elif sexual_score == 2:
                 return random.choice([
-                    "Waouh, tu n'y vas pas de main morte ! 😏",
+                    "Waouh, tu n'y vas pas de main morte ! 😘",
                     "Oh là là, tu me surprends ! 😉",
                     "Tu me fais vraiment rougir ! 🔥"
                 ])
             elif sexual_score >= 3:
                 return random.choice([
-                    "Oh mon dieu, tu es vraiment direct ! 😏",
+                    "Oh mon dieu, tu es vraiment direct ! 😘",
                     "Waouh, tu es plein d'audace ! 😉",
                     "Tu me fais carrément rougir ! 🔥"
                 ])
@@ -310,18 +424,21 @@ async def get_alicia_response(message: str, user_id: int) -> str:
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    log_metric("command", user_id, command="start")
+    
     user_contexts[user_id] = {
         "first_interaction": True,
         "conversation_history": [],
         "user_name": None,
-        "start_time": time.time()
+        "start_time": time.time(),
+        "session_start": time.time()
     }
 
     await asyncio.sleep(1.5)
-
     await update.message.reply_text("Coucou toi <3")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    log_metric("command", update.effective_user.id, command="help")
     await asyncio.sleep(1)
 
     await update.message.reply_text(
@@ -335,6 +452,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def blague_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    log_metric("command", update.effective_user.id, command="blague")
     await asyncio.sleep(1)
 
     # Utiliser Groq même pour les blagues
@@ -345,29 +463,60 @@ async def blague_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(response)
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Statistiques simples"""
-    total_users = len(user_contexts)
-    total_conversations = sum(len(ctx.get("conversation_history", [])) for ctx in user_contexts.values())
+    """Commande pour voir les statistiques détaillées"""
+    log_metric("command", update.effective_user.id, command="stats")
+    
+    stats = get_analytics_summary()
+    
+    message = f"""📊 **Analytics Alicia**
 
-    await update.message.reply_text(
-        f"📊 **Stats Alicia**\n"
-        f"👥 Utilisateurs : {total_users}\n"
-        f"💬 Conversations : {total_conversations}\n"
-        f"🤖 Modèle : Groq Llama 3.1 8B\n"
-        f"🔥 100% IA activée !"
-    )
+**📈 Général**
+👥 Total utilisateurs: {stats['general']['total_users']}
+💬 Total messages: {stats['general']['total_messages']}
+🔄 Sessions totales: {stats['general']['total_sessions']}
+🔙 Utilisateurs récurrents: {stats['general']['returning_users']}
+⏰ Uptime: {stats['general']['uptime_hours']}h
+
+**📅 Aujourd'hui**
+💬 Messages: {stats['today']['messages']}
+👤 Utilisateurs uniques: {stats['today']['unique_users']}
+🆕 Nouveaux utilisateurs: {stats['today']['new_users']}
+📊 Sessions: {stats['today']['sessions']}
+
+**📊 Moyennes**
+💬 Messages/conversation: {stats['averages']['conversation_length']}
+⏱️ Durée session: {stats['averages']['session_duration_minutes']} min
+
+**🔥 Commandes populaires**"""
+    
+    for cmd, count in stats['popular_commands'].items():
+        message += f"\n• /{cmd}: {count}"
+    
+    await update.message.reply_text(message)
 
 async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    log_metric("command", update.effective_user.id, command="clear")
     user_id = update.effective_user.id
+    
+    # Log de fin de session si une conversation était en cours
+    if user_id in user_contexts:
+        old_context = user_contexts[user_id]
+        if "session_start" in old_context:
+            session_duration = time.time() - old_context["session_start"]
+            conversation_length = len(old_context.get("conversation_history", []))
+            log_metric("session_end", value=session_duration)
+            log_metric("conversation_length", value=conversation_length)
+    
     user_contexts[user_id] = {
         "first_interaction": False,
         "conversation_history": [],
         "user_name": None,
-        "start_time": time.time()
+        "start_time": time.time(),
+        "session_start": time.time()
     }
-
+    
+    log_metric("session_start")
     await asyncio.sleep(1)
-
     await update.message.reply_text("On efface tout ! 🔄")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -399,15 +548,16 @@ def main():
 
     if not groq_token:
         print("❌ Token Groq manquant dans le fichier .env !")
-        print("📝 Va sur https://console.groq.com pour créer ta clé API")
+        print("🔍 Va sur https://console.groq.com pour créer ta clé API")
         return
 
-    print("🌟 Démarrage d'Alicia - 100% Groq AI avec fin naturelle")
+    print("🌟 Démarrage d'Alicia - 100% Groq AI avec analytics complètes")
     print("🚀 Modèle : Llama 3.1 8B Instant")
 
     if groq_token.startswith('gsk_'):
         print(f"✅ Clé Groq détectée: {groq_token[:15]}...")
         print("🔥 Mode IA intégrale activé")
+        print("📊 Analytics complètes activées")
         print("⏰ Conversations limitées naturellement")
     else:
         print("⚠️ Clé Groq invalide (ne commence pas par gsk_)")
@@ -422,7 +572,7 @@ def main():
     app.add_handler(CommandHandler("clear", clear_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    print("💕 Alicia est prête !")
+    print("💕 Alicia est prête avec analytics complètes !")
     
     app.run_polling()
 
